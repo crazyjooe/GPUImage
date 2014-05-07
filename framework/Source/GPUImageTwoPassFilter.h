@@ -2,11 +2,13 @@
 
 @interface GPUImageTwoPassFilter : GPUImageFilter
 {
-    GPUImageFramebuffer *secondOutputFramebuffer;
+    GLuint secondFilterOutputTexture;
 
     GLProgram *secondFilterProgram;
     GLint secondFilterPositionAttribute, secondFilterTextureCoordinateAttribute;
     GLint secondFilterInputTextureUniform, secondFilterInputTextureUniform2;
+    
+    GLuint secondFilterFramebuffer;
     
     NSMutableDictionary *secondProgramUniformStateRestorationBlocks;
 }
@@ -15,5 +17,9 @@
 - (id)initWithFirstStageVertexShaderFromString:(NSString *)firstStageVertexShaderString firstStageFragmentShaderFromString:(NSString *)firstStageFragmentShaderString secondStageVertexShaderFromString:(NSString *)secondStageVertexShaderString secondStageFragmentShaderFromString:(NSString *)secondStageFragmentShaderString;
 - (id)initWithFirstStageFragmentShaderFromString:(NSString *)firstStageFragmentShaderString secondStageFragmentShaderFromString:(NSString *)secondStageFragmentShaderString;
 - (void)initializeSecondaryAttributes;
+- (void)initializeSecondOutputTextureIfNeeded;
+
+// Managing the display FBOs
+- (void)createSecondFilterFBOofSize:(CGSize)currentFBOSize;
 
 @end

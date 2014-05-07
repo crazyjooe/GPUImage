@@ -14,13 +14,12 @@
 
     runSynchronouslyOnVideoProcessingQueue(^{
         [GPUImageContext useImageProcessingContext];
+
+        [self deleteOutputTexture];
     });
     
+    outputTexture = newInputTexture;
     textureSize = newTextureSize;
-
-    runSynchronouslyOnVideoProcessingQueue(^{
-        outputFramebuffer = [[GPUImageFramebuffer alloc] initWithSize:newTextureSize overriddenTexture:newInputTexture];
-    });
     
     return self;
 }
@@ -37,7 +36,6 @@
             NSInteger targetTextureIndex = [[targetTextureIndices objectAtIndex:indexOfObject] integerValue];
             
             [currentTarget setInputSize:textureSize atIndex:targetTextureIndex];
-            [currentTarget setInputFramebuffer:outputFramebuffer atIndex:targetTextureIndex];
             [currentTarget newFrameReadyAtTime:frameTime atIndex:targetTextureIndex];
         }
     });

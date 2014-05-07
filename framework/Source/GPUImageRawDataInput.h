@@ -36,7 +36,6 @@ typedef enum {
 // Image rendering
 - (void)updateDataFromBytes:(GLubyte *)bytesToUpload size:(CGSize)imageSize;
 - (void)processData;
-- (void)processDataForTimestamp:(CMTime)frameTime;
 - (CGSize)outputImageSize;
 
 @end

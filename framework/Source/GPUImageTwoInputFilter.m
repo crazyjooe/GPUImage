@@ -84,47 +84,42 @@ NSString *const kGPUImageTwoInputTextureVertexShaderString = SHADER_STRING
 #pragma mark -
 #pragma mark Rendering
 
-- (void)renderToTextureWithVertices:(const GLfloat *)vertices textureCoordinates:(const GLfloat *)textureCoordinates;
+- (void)renderToTextureWithVertices:(const GLfloat *)vertices textureCoordinates:(const GLfloat *)textureCoordinates sourceTexture:(GLuint)sourceTexture;
 {
     if (self.preventRendering)
     {
-        [firstInputFramebuffer unlock];
-        [secondInputFramebuffer unlock];
         return;
     }
     
     [GPUImageContext setActiveShaderProgram:filterProgram];
-    outputFramebuffer = [[GPUImageContext sharedFramebufferCache] fetchFramebufferForSize:[self sizeOfFBO] textureOptions:self.outputTextureOptions onlyTexture:NO];
-    [outputFramebuffer activateFramebuffer];
-    if (usingNextFrameForImageCapture)
-    {
-        [outputFramebuffer lock];
-    }
-
+    [self setFilterFBO];
     [self setUniformsForProgramAtIndex:0];
         
     glClearColor(backgroundColorRed, backgroundColorGreen, backgroundColorBlue, backgroundColorAlpha);
     glClear(GL_COLOR_BUFFER_BIT);
     
 	glActiveTexture(GL_TEXTURE2);
-	glBindTexture(GL_TEXTURE_2D, [firstInputFramebuffer texture]);
+	glBindTexture(GL_TEXTURE_2D, sourceTexture);
 	glUniform1i(filterInputTextureUniform, 2);	
     
     glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, [secondInputFramebuffer texture]);
+    glBindTexture(GL_TEXTURE_2D, filterSourceTexture2);                
     glUniform1i(filterInputTextureUniform2, 3);
     
     glVertexAttribPointer(filterPositionAttribute, 2, GL_FLOAT, 0, 0, vertices);
 	glVertexAttribPointer(filterTextureCoordinateAttribute, 2, GL_FLOAT, 0, 0, textureCoordinates);
     glVertexAttribPointer(filterSecondTextureCoordinateAttribute, 2, GL_FLOAT, 0, 0, [[self class] textureCoordinatesForRotation:inputRotation2]);
     
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);    
+}
 
-    [firstInputFramebuffer unlock];
-    [secondInputFramebuffer unlock];
-    if (usingNextFrameForImageCapture)
+- (void)releaseInputTexturesIfNeeded;
+{
+    if (shouldConserveMemoryForNextFrame)
     {
-        dispatch_semaphore_signal(imageCaptureSemaphore);
+        [firstTextureDelegate textureNoLongerNeededForTarget:self];
+        [secondTextureDelegate textureNoLongerNeededForTarget:self];
+        shouldConserveMemoryForNextFrame = NO;
     }
 }
 
@@ -143,18 +138,16 @@ NSString *const kGPUImageTwoInputTextureVertexShaderString = SHADER_STRING
     }
 }
 
-- (void)setInputFramebuffer:(GPUImageFramebuffer *)newInputFramebuffer atIndex:(NSInteger)textureIndex;
+- (void)setInputTexture:(GLuint)newInputTexture atIndex:(NSInteger)textureIndex;
 {
     if (textureIndex == 0)
     {
-        firstInputFramebuffer = newInputFramebuffer;
+        filterSourceTexture = newInputTexture;
         hasSetFirstTexture = YES;
-        [firstInputFramebuffer lock];
     }
     else
     {
-        secondInputFramebuffer = newInputFramebuffer;
-        [secondInputFramebuffer lock];
+        filterSourceTexture2 = newInputTexture;
     }
 }
 
@@ -208,6 +201,8 @@ NSString *const kGPUImageTwoInputTextureVertexShaderString = SHADER_STRING
 
 - (void)newFrameReadyAtTime:(CMTime)frameTime atIndex:(NSInteger)textureIndex;
 {
+    outputTextureRetainCount = [targets count];
+
     // You can set up infinite update loops, so this helps to short circuit them
     if (hasReceivedFirstFrame && hasReceivedSecondFrame)
     {
@@ -258,6 +253,18 @@ NSString *const kGPUImageTwoInputTextureVertexShaderString = SHADER_STRING
         [super newFrameReadyAtTime:passOnFrameTime atIndex:0]; // Bugfix when trying to record: always use time from first input (unless indefinite, in which case use the second input)
         hasReceivedFirstFrame = NO;
         hasReceivedSecondFrame = NO;
+    }
+}
+
+- (void)setTextureDelegate:(id<GPUImageTextureDelegate>)newTextureDelegate atIndex:(NSInteger)textureIndex;
+{
+    if (textureIndex == 0)
+    {
+        firstTextureDelegate = newTextureDelegate;
+    }
+    else
+    {
+        secondTextureDelegate = newTextureDelegate;
     }
 }
 

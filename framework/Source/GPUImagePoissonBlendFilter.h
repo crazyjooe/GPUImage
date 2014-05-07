@@ -5,7 +5,8 @@
 {
     GLint mixUniform;
     
-    GPUImageFramebuffer *secondOutputFramebuffer;
+    GLuint secondFilterOutputTexture;
+    GLuint secondFilterFramebuffer;
 }
 
 // Mix ranges from 0.0 (only image 1) to 1.0 (only image 2 gradients), with 1.0 as the normal level

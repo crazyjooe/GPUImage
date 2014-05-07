@@ -30,12 +30,10 @@
     [rawDataInput addTarget:customFilter];
     [customFilter addTarget:rawDataOutput];
     
-    __unsafe_unretained GPUImageRawDataOutput * weakOutput = rawDataOutput;
     [rawDataOutput setNewFrameAvailableBlock:^{
-        [weakOutput lockFramebufferForReading];
-        GLubyte *outputBytes = [weakOutput rawBytesForImage];
-        NSInteger bytesPerRow = [weakOutput bytesPerRowInOutput];
-        NSLog(@"Bytes per row: %ld", (unsigned long)bytesPerRow);
+        GLubyte *outputBytes = [rawDataOutput rawBytesForImage];
+        NSInteger bytesPerRow = [rawDataOutput bytesPerRowInOutput];
+        NSLog(@"Bytes per row: %d", bytesPerRow);
         for (unsigned int yIndex = 0; yIndex < 10; yIndex++)
         {
             for (unsigned int xIndex = 0; xIndex < 10; xIndex++)
@@ -43,7 +41,6 @@
                 NSLog(@"Byte at (%d, %d): %d, %d, %d, %d", xIndex, yIndex, outputBytes[yIndex * bytesPerRow + xIndex * 4], outputBytes[yIndex * bytesPerRow + xIndex * 4 + 1], outputBytes[yIndex * bytesPerRow + xIndex * 4 + 2], outputBytes[yIndex * bytesPerRow + xIndex * 4 + 3]);
             }
         }
-        [weakOutput unlockFramebufferAfterReading];
     }];
     
     [rawDataInput processData];

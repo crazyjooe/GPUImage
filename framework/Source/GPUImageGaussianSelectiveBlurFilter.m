@@ -57,7 +57,7 @@ NSString *const kGPUImageGaussianSelectiveBlurFragmentShaderString = SHADER_STRI
 @implementation GPUImageGaussianSelectiveBlurFilter
 
 @synthesize excludeCirclePoint = _excludeCirclePoint, excludeCircleRadius = _excludeCircleRadius, excludeBlurSize = _excludeBlurSize;
-@synthesize blurRadiusInPixels = _blurRadiusInPixels;
+@synthesize blurSize = _blurSize;
 @synthesize aspectRatio = _aspectRatio;
 
 - (id)init;
@@ -84,7 +84,7 @@ NSString *const kGPUImageGaussianSelectiveBlurFragmentShaderString = SHADER_STRI
     self.initialFilters = [NSArray arrayWithObjects:blurFilter, selectiveFocusFilter, nil];
     self.terminalFilter = selectiveFocusFilter;
     
-    self.blurRadiusInPixels = 5.0;
+    self.blurSize = 2.0;
     
     self.excludeCircleRadius = 60.0/320.0;
     self.excludeCirclePoint = CGPointMake(0.5f, 0.5f);
@@ -109,14 +109,14 @@ NSString *const kGPUImageGaussianSelectiveBlurFragmentShaderString = SHADER_STRI
 #pragma mark -
 #pragma mark Accessors
 
-- (void)setBlurRadiusInPixels:(CGFloat)newValue;
+- (void)setBlurSize:(CGFloat)newValue;
 {
-    blurFilter.blurRadiusInPixels = newValue;
+    blurFilter.blurSize = newValue;
 }
 
-- (CGFloat)blurRadiusInPixels;
+- (CGFloat)blurSize;
 {
-    return blurFilter.blurRadiusInPixels;
+    return blurFilter.blurSize;
 }
 
 - (void)setExcludeCirclePoint:(CGPoint)newValue;

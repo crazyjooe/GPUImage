@@ -484,7 +484,6 @@ enum {
         textureForCubeFace = callbackTextureOutput.texture;
         
         [self renderByRotatingAroundX:0.0 rotatingAroundY:0.0];
-        [callbackTextureOutput doneWithTexture];
     });
 }
 

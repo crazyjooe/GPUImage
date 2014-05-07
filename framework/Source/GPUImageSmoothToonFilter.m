@@ -5,7 +5,7 @@
 @implementation GPUImageSmoothToonFilter
 
 @synthesize threshold;
-@synthesize blurRadiusInPixels;
+@synthesize blurSize;
 @synthesize quantizationLevels;
 @synthesize texelWidth;
 @synthesize texelHeight;
@@ -31,7 +31,7 @@
     self.initialFilters = [NSArray arrayWithObject:blurFilter];
     self.terminalFilter = toonFilter;
     
-    self.blurRadiusInPixels = 2.0;
+    self.blurSize = 0.5;
     self.threshold = 0.2;
     self.quantizationLevels = 10.0;
     
@@ -41,14 +41,14 @@
 #pragma mark -
 #pragma mark Accessors
 
-- (void)setBlurRadiusInPixels:(CGFloat)newValue;
+- (void)setBlurSize:(CGFloat)newValue;
 {
-    blurFilter.blurRadiusInPixels = newValue;
+    blurFilter.blurSize = newValue;
 }
 
-- (CGFloat)blurRadiusInPixels;
+- (CGFloat)blurSize;
 {
-    return blurFilter.blurRadiusInPixels;
+    return blurFilter.blurSize;
 }
 
 - (void)setTexelWidth:(CGFloat)newValue;

@@ -2,9 +2,9 @@
 #import "GPUImageGaussianBlurFilter.h"
 #import "GPUImageXYDerivativeFilter.h"
 #import "GPUImageGrayscaleFilter.h"
+#import "GPUImageFastBlurFilter.h"
 #import "GPUImageThresholdedNonMaximumSuppressionFilter.h"
 #import "GPUImageColorPackingFilter.h"
-#import "GPUImageGaussianBlurFilter.h"
 
 @interface GPUImageHarrisCornerDetectionFilter()
 
@@ -67,7 +67,7 @@ NSString *const kGPUImageHarrisCornerDetectionFragmentShaderString = SHADER_STRI
 );
 #endif
 
-@synthesize blurRadiusInPixels;
+@synthesize blurSize;
 @synthesize cornersDetectedBlock;
 @synthesize sensitivity = _sensitivity;
 @synthesize threshold = _threshold;
@@ -111,7 +111,7 @@ NSString *const kGPUImageHarrisCornerDetectionFragmentShaderString = SHADER_STRI
 #endif
 
     // Second pass: blur the derivative
-    blurFilter = [[GPUImageGaussianBlurFilter alloc] init];
+    blurFilter = [[GPUImageFastBlurFilter alloc] init];
     [self addFilter:blurFilter];
     
 #ifdef DEBUGFEATUREDETECTION
@@ -185,7 +185,7 @@ NSString *const kGPUImageHarrisCornerDetectionFragmentShaderString = SHADER_STRI
 //    self.terminalFilter = colorPackingFilter;
     self.terminalFilter = nonMaximumSuppressionFilter;
     
-    self.blurRadiusInPixels = 2.0;
+    self.blurSize = 1.0;
     self.sensitivity = 5.0;
     self.threshold = 0.20;
     
@@ -256,21 +256,20 @@ NSString *const kGPUImageHarrisCornerDetectionFragmentShaderString = SHADER_STRI
 
 - (BOOL)wantsMonochromeInput;
 {
-//    return YES;
-    return NO;
+    return YES;
 }
 
 #pragma mark -
 #pragma mark Accessors
 
-- (void)setBlurRadiusInPixels:(CGFloat)newValue;
+- (void)setBlurSize:(CGFloat)newValue;
 {
-    blurFilter.blurRadiusInPixels = newValue;
+    blurFilter.blurSize = newValue;
 }
 
-- (CGFloat)blurRadiusInPixels;
+- (CGFloat)blurSize;
 {
-    return blurFilter.blurRadiusInPixels;
+    return blurFilter.blurSize;
 }
 
 - (void)setSensitivity:(CGFloat)newValue;

@@ -15,14 +15,14 @@
 	AVCaptureVideoDataOutput *videoOutput;
     
     CIContext *coreImageContext;
-    CIFilter *coreImageFilter;
+    CIFilter *sepiaCoreImageFilter;
     
     GLuint _renderBuffer;
 
     BOOL processUsingCPU;
 
     GPUImageVideoCamera *videoCamera;
-    GPUImageOutput<GPUImageInput> *benchmarkedGPUImageFilter;
+    GPUImageSepiaFilter *sepiaFilter;
     GPUImageView *filterView;
     
     __unsafe_unretained id<VideoFilteringCallback> delegate;

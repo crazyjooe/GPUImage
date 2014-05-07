@@ -10,7 +10,7 @@
 {
     GLubyte *rawImagePixels;
     GLfloat *lineCoordinates;
-    unsigned int maxLinePairsToRender, linePairsToRender;
+    NSUInteger maxLinePairsToRender, linePairsToRender;
 }
 
 @end

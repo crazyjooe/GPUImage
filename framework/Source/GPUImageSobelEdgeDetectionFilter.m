@@ -147,14 +147,12 @@ NSString *const kGPUImageSobelEdgeDetectionFragmentShaderString = SHADER_STRING
 
 - (BOOL)wantsMonochromeInput;
 {
-//    return YES;
-    return NO;
+    return YES;
 }
 
 - (BOOL)providesMonochromeOutput;
 {
-//    return YES;
-    return NO;
+    return YES;
 }
 
 #pragma mark -

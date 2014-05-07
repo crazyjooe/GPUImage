@@ -2,36 +2,12 @@
 #import "GPUImageMovieWriter.h"
 #import "GPUImageFilter.h"
 
-// Color Conversion Constants (YUV to RGB) including adjustment from 16-235/16-240 (video range)
-
-// BT.601, which is the standard for SDTV.
-const GLfloat kColorConversion601[] = {
-    1.164,  1.164, 1.164,
-    0.0, -0.392, 2.017,
-    1.596, -0.813,   0.0,
-};
-
-// BT.709, which is the standard for HDTV.
-const GLfloat kColorConversion709[] = {
-    1.164,  1.164, 1.164,
-    0.0, -0.213, 2.112,
-    1.793, -0.533,   0.0,
-};
-
-// BT.601 full range (ref: http://www.equasys.de/colorconversion.html)
-const GLfloat kColorConversion601FullRange[] = {
-    1.0,    1.0,    1.0,
-    0.0,    -0.343, 1.765,
-    1.4,    -0.711, 0.0,
-};
-
 NSString *const kGPUImageYUVVideoRangeConversionForRGFragmentShaderString = SHADER_STRING
 (
  varying highp vec2 textureCoordinate;
  
  uniform sampler2D luminanceTexture;
  uniform sampler2D chrominanceTexture;
- uniform mediump mat3 colorConversionMatrix;
  
  void main()
  {
@@ -40,19 +16,29 @@ NSString *const kGPUImageYUVVideoRangeConversionForRGFragmentShaderString = SHAD
      
      yuv.x = texture2D(luminanceTexture, textureCoordinate).r;
      yuv.yz = texture2D(chrominanceTexture, textureCoordinate).rg - vec2(0.5, 0.5);
-     rgb = colorConversionMatrix * yuv;
+     
+     // BT.601, which is the standard for SDTV is provided as a reference
+     /*
+      rgb = mat3(      1,       1,       1,
+      0, -.39465, 2.03211,
+      1.13983, -.58060,       0) * yuv;
+      */
+     
+     // Using BT.709 which is the standard for HDTV
+     rgb = mat3(      1,       1,       1,
+                0, -.21482, 2.12798,
+                1.28033, -.38059,       0) * yuv;
      
      gl_FragColor = vec4(rgb, 1);
  }
- );
+);
 
-NSString *const kGPUImageYUVFullRangeConversionForLAFragmentShaderString = SHADER_STRING
+NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHADER_STRING
 (
  varying highp vec2 textureCoordinate;
  
  uniform sampler2D luminanceTexture;
  uniform sampler2D chrominanceTexture;
- uniform mediump mat3 colorConversionMatrix;
  
  void main()
  {
@@ -61,28 +47,18 @@ NSString *const kGPUImageYUVFullRangeConversionForLAFragmentShaderString = SHADE
      
      yuv.x = texture2D(luminanceTexture, textureCoordinate).r;
      yuv.yz = texture2D(chrominanceTexture, textureCoordinate).ra - vec2(0.5, 0.5);
-     rgb = colorConversionMatrix * yuv;
      
-     gl_FragColor = vec4(rgb, 1);
- }
- );
-
-NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHADER_STRING
-(
- varying highp vec2 textureCoordinate;
- 
- uniform sampler2D luminanceTexture;
- uniform sampler2D chrominanceTexture;
- uniform mediump mat3 colorConversionMatrix;
- 
- void main()
- {
-     mediump vec3 yuv;
-     lowp vec3 rgb;
+     // BT.601, which is the standard for SDTV is provided as a reference
+     /*
+      rgb = mat3(      1,       1,       1,
+      0, -.39465, 2.03211,
+      1.13983, -.58060,       0) * yuv;
+      */
      
-     yuv.x = texture2D(luminanceTexture, textureCoordinate).r - (16.0/255.0);
-     yuv.yz = texture2D(chrominanceTexture, textureCoordinate).ra - vec2(0.5, 0.5);
-     rgb = colorConversionMatrix * yuv;
+     // Using BT.709 which is the standard for HDTV
+     rgb = mat3(      1,       1,       1,
+                0, -.21482, 2.12798,
+                1.28033, -.38059,       0) * yuv;
      
      gl_FragColor = vec4(rgb, 1);
  }
@@ -98,23 +74,21 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 	AVCaptureAudioDataOutput *audioOutput;
     NSDate *startingCaptureTime;
 	
+	NSInteger _frameRate;
+    
     dispatch_queue_t cameraProcessingQueue, audioProcessingQueue;
     
     GLProgram *yuvConversionProgram;
     GLint yuvConversionPositionAttribute, yuvConversionTextureCoordinateAttribute;
     GLint yuvConversionLuminanceTextureUniform, yuvConversionChrominanceTextureUniform;
-    GLint yuvConversionMatrixUniform;
-    const GLfloat *_preferredConversion;
-    
-    BOOL isFullYUVRange;
+    GLuint yuvConversionFramebuffer;
     
     int imageBufferWidth, imageBufferHeight;
-    
-    BOOL addedAudioInputsDueToEncodingTarget;
 }
 
 - (void)updateOrientationSendToTargets;
 - (void)convertYUVToRGBOutput;
+- (void)setYUVConversionFBO;
 
 @end
 
@@ -127,7 +101,6 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 @synthesize outputImageOrientation = _outputImageOrientation;
 @synthesize delegate = _delegate;
 @synthesize horizontallyMirrorFrontFacingCamera = _horizontallyMirrorFrontFacingCamera, horizontallyMirrorRearFacingCamera = _horizontallyMirrorRearFacingCamera;
-@synthesize frameRate = _frameRate;
 
 #pragma mark -
 #pragma mark Initialization and teardown
@@ -158,9 +131,72 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
     _runBenchmark = NO;
     capturePaused = NO;
     outputRotation = kGPUImageNoRotation;
-    internalRotation = kGPUImageNoRotation;
     captureAsYUV = YES;
-    _preferredConversion = kColorConversion709;
+
+    runSynchronouslyOnVideoProcessingQueue(^{
+        
+        if (captureAsYUV)
+        {
+            [GPUImageContext useImageProcessingContext];
+//            if ([GPUImageContext deviceSupportsRedTextures])
+//            {
+//                yuvConversionProgram = [[GPUImageContext sharedImageProcessingContext] programForVertexShaderString:kGPUImageVertexShaderString fragmentShaderString:kGPUImageYUVVideoRangeConversionForRGFragmentShaderString];
+//            }
+//            else
+//            {
+                yuvConversionProgram = [[GPUImageContext sharedImageProcessingContext] programForVertexShaderString:kGPUImageVertexShaderString fragmentShaderString:kGPUImageYUVVideoRangeConversionForLAFragmentShaderString];
+//            }
+
+            if (!yuvConversionProgram.initialized)
+            {
+                [yuvConversionProgram addAttribute:@"position"];
+                [yuvConversionProgram addAttribute:@"inputTextureCoordinate"];
+                
+                if (![yuvConversionProgram link])
+                {
+                    NSString *progLog = [yuvConversionProgram programLog];
+                    NSLog(@"Program link log: %@", progLog);
+                    NSString *fragLog = [yuvConversionProgram fragmentShaderLog];
+                    NSLog(@"Fragment shader compile log: %@", fragLog);
+                    NSString *vertLog = [yuvConversionProgram vertexShaderLog];
+                    NSLog(@"Vertex shader compile log: %@", vertLog);
+                    yuvConversionProgram = nil;
+                    NSAssert(NO, @"Filter shader link failed");
+                }
+            }
+            
+            yuvConversionPositionAttribute = [yuvConversionProgram attributeIndex:@"position"];
+            yuvConversionTextureCoordinateAttribute = [yuvConversionProgram attributeIndex:@"inputTextureCoordinate"];
+            yuvConversionLuminanceTextureUniform = [yuvConversionProgram uniformIndex:@"luminanceTexture"];
+            yuvConversionChrominanceTextureUniform = [yuvConversionProgram uniformIndex:@"chrominanceTexture"];
+            
+            [GPUImageContext setActiveShaderProgram:yuvConversionProgram];
+            
+            glEnableVertexAttribArray(yuvConversionPositionAttribute);
+            glEnableVertexAttribArray(yuvConversionTextureCoordinateAttribute);
+        }
+        
+        if ([GPUImageContext supportsFastTextureUpload])
+        {
+            [GPUImageContext useImageProcessingContext];
+#if defined(__IPHONE_6_0)
+            CVReturn err = CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, [[GPUImageContext sharedImageProcessingContext] context], NULL, &coreVideoTextureCache);
+#else
+            CVReturn err = CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, (__bridge void *)[[GPUImageContext sharedImageProcessingContext] context], NULL, &coreVideoTextureCache);
+#endif
+            if (err)
+            {
+                NSAssert(NO, @"Error at CVOpenGLESTextureCacheCreate %d", err);
+            }
+            
+            // Need to remove the initially created texture
+//            [self deleteOutputTexture];
+        }
+        else
+        {
+            [self initializeOutputTextureIfNeeded];
+        }
+    });
     
 	// Grab the back-facing or front-facing camera
     _inputCamera = nil;
@@ -210,71 +246,16 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
         if (supportsFullYUVRange)
         {
             [videoOutput setVideoSettings:[NSDictionary dictionaryWithObject:[NSNumber numberWithInt:kCVPixelFormatType_420YpCbCr8BiPlanarFullRange] forKey:(id)kCVPixelBufferPixelFormatTypeKey]];
-            isFullYUVRange = YES;
         }
         else
         {
             [videoOutput setVideoSettings:[NSDictionary dictionaryWithObject:[NSNumber numberWithInt:kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange] forKey:(id)kCVPixelBufferPixelFormatTypeKey]];
-            isFullYUVRange = NO;
         }
     }
     else
     {
         [videoOutput setVideoSettings:[NSDictionary dictionaryWithObject:[NSNumber numberWithInt:kCVPixelFormatType_32BGRA] forKey:(id)kCVPixelBufferPixelFormatTypeKey]];
     }
-    
-    runSynchronouslyOnVideoProcessingQueue(^{
-        
-        if (captureAsYUV)
-        {
-            [GPUImageContext useImageProcessingContext];
-            //            if ([GPUImageContext deviceSupportsRedTextures])
-            //            {
-            //                yuvConversionProgram = [[GPUImageContext sharedImageProcessingContext] programForVertexShaderString:kGPUImageVertexShaderString fragmentShaderString:kGPUImageYUVVideoRangeConversionForRGFragmentShaderString];
-            //            }
-            //            else
-            //            {
-            if (isFullYUVRange)
-            {
-                yuvConversionProgram = [[GPUImageContext sharedImageProcessingContext] programForVertexShaderString:kGPUImageVertexShaderString fragmentShaderString:kGPUImageYUVFullRangeConversionForLAFragmentShaderString];
-            }
-            else
-            {
-                yuvConversionProgram = [[GPUImageContext sharedImageProcessingContext] programForVertexShaderString:kGPUImageVertexShaderString fragmentShaderString:kGPUImageYUVVideoRangeConversionForLAFragmentShaderString];
-            }
-
-            //            }
-            
-            if (!yuvConversionProgram.initialized)
-            {
-                [yuvConversionProgram addAttribute:@"position"];
-                [yuvConversionProgram addAttribute:@"inputTextureCoordinate"];
-                
-                if (![yuvConversionProgram link])
-                {
-                    NSString *progLog = [yuvConversionProgram programLog];
-                    NSLog(@"Program link log: %@", progLog);
-                    NSString *fragLog = [yuvConversionProgram fragmentShaderLog];
-                    NSLog(@"Fragment shader compile log: %@", fragLog);
-                    NSString *vertLog = [yuvConversionProgram vertexShaderLog];
-                    NSLog(@"Vertex shader compile log: %@", vertLog);
-                    yuvConversionProgram = nil;
-                    NSAssert(NO, @"Filter shader link failed");
-                }
-            }
-            
-            yuvConversionPositionAttribute = [yuvConversionProgram attributeIndex:@"position"];
-            yuvConversionTextureCoordinateAttribute = [yuvConversionProgram attributeIndex:@"inputTextureCoordinate"];
-            yuvConversionLuminanceTextureUniform = [yuvConversionProgram uniformIndex:@"luminanceTexture"];
-            yuvConversionChrominanceTextureUniform = [yuvConversionProgram uniformIndex:@"chrominanceTexture"];
-            yuvConversionMatrixUniform = [yuvConversionProgram uniformIndex:@"colorConversionMatrix"];
-            
-            [GPUImageContext setActiveShaderProgram:yuvConversionProgram];
-            
-            glEnableVertexAttribArray(yuvConversionPositionAttribute);
-            glEnableVertexAttribArray(yuvConversionTextureCoordinateAttribute);
-        }
-    });
     
     [videoOutput setSampleBufferDelegate:self queue:cameraProcessingQueue];
 	if ([_captureSession canAddOutput:videoOutput])
@@ -303,11 +284,6 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 	return self;
 }
 
-- (GPUImageFramebuffer *)framebufferForOutput;
-{
-    return outputFramebuffer;
-}
-
 - (void)dealloc 
 {
     [self stopCameraCapture];
@@ -316,6 +292,11 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
     
     [self removeInputsAndOutputs];
     
+    if ([GPUImageContext supportsFastTextureUpload])
+    {
+        CFRelease(coreVideoTextureCache);
+    }
+
 // ARC forbids explicit message send of 'release'; since iOS 6 even for dispatch_release() calls: stripping it out in that case is required.
 #if ( (__IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_6_0) || (!defined(__IPHONE_6_0)) )    
     if (frameRenderingSemaphore != NULL)
@@ -323,70 +304,23 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
         dispatch_release(frameRenderingSemaphore);
     }
 #endif
-}
-
-- (BOOL)addAudioInputsAndOutputs
-{
-    if (audioOutput)
-        return NO;
     
-    [_captureSession beginConfiguration];
-    
-    _microphone = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
-    audioInput = [AVCaptureDeviceInput deviceInputWithDevice:_microphone error:nil];
-    if ([_captureSession canAddInput:audioInput])
+//    if (captureAsYUV && [GPUImageContext deviceSupportsRedTextures])
+    if (captureAsYUV && [GPUImageContext supportsFastTextureUpload])
     {
-        [_captureSession addInput:audioInput];
+        [self destroyYUVConversionFBO];
     }
-    audioOutput = [[AVCaptureAudioDataOutput alloc] init];
-    
-    if ([_captureSession canAddOutput:audioOutput])
-    {
-        [_captureSession addOutput:audioOutput];
-    }
-    else
-    {
-        NSLog(@"Couldn't add audio output");
-    }
-    [audioOutput setSampleBufferDelegate:self queue:audioProcessingQueue];
-    
-    [_captureSession commitConfiguration];
-    return YES;
-}
-
-- (BOOL)removeAudioInputsAndOutputs
-{
-    if (!audioOutput)
-        return NO;
-    
-    [_captureSession beginConfiguration];
-    [_captureSession removeInput:audioInput];
-    [_captureSession removeOutput:audioOutput];
-    audioInput = nil;
-    audioOutput = nil;
-    _microphone = nil;
-    [_captureSession commitConfiguration];
-    return YES;
 }
 
 - (void)removeInputsAndOutputs;
 {
-    [_captureSession beginConfiguration];
-    if (videoInput) {
-        [_captureSession removeInput:videoInput];
-        [_captureSession removeOutput:videoOutput];
-        videoInput = nil;
-        videoOutput = nil;
-    }
+    [_captureSession removeInput:videoInput];
+    [_captureSession removeOutput:videoOutput];
     if (_microphone != nil)
     {
         [_captureSession removeInput:audioInput];
         [_captureSession removeOutput:audioOutput];
-        audioInput = nil;
-        audioOutput = nil;
-        _microphone = nil;
     }
-    [_captureSession commitConfiguration];
 }
 
 #pragma mark -
@@ -531,75 +465,35 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 	[_captureSession commitConfiguration];
 }
 
-- (void)setFrameRate:(int32_t)frameRate;
+- (void)setFrameRate:(NSInteger)frameRate;
 {
 	_frameRate = frameRate;
 	
 	if (_frameRate > 0)
 	{
-		if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
-            [_inputCamera respondsToSelector:@selector(setActiveVideoMaxFrameDuration:)]) {
-            
-            NSError *error;
-            [_inputCamera lockForConfiguration:&error];
-            if (error == nil) {
-#if defined(__IPHONE_7_0)
-                [_inputCamera setActiveVideoMinFrameDuration:CMTimeMake(1, _frameRate)];
-                [_inputCamera setActiveVideoMaxFrameDuration:CMTimeMake(1, _frameRate)];
-#endif
-            }
-            [_inputCamera unlockForConfiguration];
-            
-        } else {
-            
-            for (AVCaptureConnection *connection in videoOutput.connections)
-            {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                if ([connection respondsToSelector:@selector(setVideoMinFrameDuration:)])
-                    connection.videoMinFrameDuration = CMTimeMake(1, _frameRate);
-                
-                if ([connection respondsToSelector:@selector(setVideoMaxFrameDuration:)])
-                    connection.videoMaxFrameDuration = CMTimeMake(1, _frameRate);
-#pragma clang diagnostic pop
-            }
-        }
-        
+		for (AVCaptureConnection *connection in videoOutput.connections)
+		{
+			if ([connection respondsToSelector:@selector(setVideoMinFrameDuration:)])
+				connection.videoMinFrameDuration = CMTimeMake(1, _frameRate);
+			
+			if ([connection respondsToSelector:@selector(setVideoMaxFrameDuration:)])
+				connection.videoMaxFrameDuration = CMTimeMake(1, _frameRate);
+		}
 	}
 	else
 	{
-		if ([_inputCamera respondsToSelector:@selector(setActiveVideoMinFrameDuration:)] &&
-            [_inputCamera respondsToSelector:@selector(setActiveVideoMaxFrameDuration:)]) {
-            
-            NSError *error;
-            [_inputCamera lockForConfiguration:&error];
-            if (error == nil) {
-#if defined(__IPHONE_7_0)
-                [_inputCamera setActiveVideoMinFrameDuration:kCMTimeInvalid];
-                [_inputCamera setActiveVideoMaxFrameDuration:kCMTimeInvalid];
-#endif
-            }
-            [_inputCamera unlockForConfiguration];
-            
-        } else {
-            
-            for (AVCaptureConnection *connection in videoOutput.connections)
-            {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-                if ([connection respondsToSelector:@selector(setVideoMinFrameDuration:)])
-                    connection.videoMinFrameDuration = kCMTimeInvalid; // This sets videoMinFrameDuration back to default
-                
-                if ([connection respondsToSelector:@selector(setVideoMaxFrameDuration:)])
-                    connection.videoMaxFrameDuration = kCMTimeInvalid; // This sets videoMaxFrameDuration back to default
-#pragma clang diagnostic pop
-            }
-        }
-        
+		for (AVCaptureConnection *connection in videoOutput.connections)
+		{
+			if ([connection respondsToSelector:@selector(setVideoMinFrameDuration:)])
+				connection.videoMinFrameDuration = kCMTimeInvalid; // This sets videoMinFrameDuration back to default
+			
+			if ([connection respondsToSelector:@selector(setVideoMaxFrameDuration:)])
+				connection.videoMaxFrameDuration = kCMTimeInvalid; // This sets videoMaxFrameDuration back to default
+		}
 	}
 }
 
-- (int32_t)frameRate;
+- (NSInteger)frameRate;
 {
 	return _frameRate;
 }
@@ -620,7 +514,6 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 
 - (void)updateTargetsForVideoCameraUsingCacheTextureAtWidth:(int)bufferWidth height:(int)bufferHeight time:(CMTime)currentTime;
 {
-    // First, update all the framebuffers in the targets
     for (id<GPUImageInput> currentTarget in targets)
     {
         if ([currentTarget enabled])
@@ -636,38 +529,20 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
                 if ([currentTarget wantsMonochromeInput] && captureAsYUV)
                 {
                     [currentTarget setCurrentlyReceivingMonochromeInput:YES];
-                    // TODO: Replace optimization for monochrome output
-                    [currentTarget setInputFramebuffer:outputFramebuffer atIndex:textureIndexOfTarget];
+                    [currentTarget setInputTexture:luminanceTexture atIndex:textureIndexOfTarget];
                 }
                 else
                 {
                     [currentTarget setCurrentlyReceivingMonochromeInput:NO];
-                    [currentTarget setInputFramebuffer:outputFramebuffer atIndex:textureIndexOfTarget];
+                    [currentTarget setInputTexture:outputTexture atIndex:textureIndexOfTarget];
                 }
+                
+                [currentTarget newFrameReadyAtTime:currentTime atIndex:textureIndexOfTarget];
             }
             else
             {
                 [currentTarget setInputRotation:outputRotation atIndex:textureIndexOfTarget];
-                [currentTarget setInputFramebuffer:outputFramebuffer atIndex:textureIndexOfTarget];
-            }
-        }
-    }
-    
-    // Then release our hold on the local framebuffer to send it back to the cache as soon as it's no longer needed
-    [outputFramebuffer unlock];
-    outputFramebuffer = nil;
-    
-    // Finally, trigger rendering as needed
-    for (id<GPUImageInput> currentTarget in targets)
-    {
-        if ([currentTarget enabled])
-        {
-            NSInteger indexOfObject = [targets indexOfObject:currentTarget];
-            NSInteger textureIndexOfTarget = [[targetTextureIndices objectAtIndex:indexOfObject] integerValue];
-            
-            if (currentTarget != self.targetToIgnoreForUpdates)
-            {
-                [currentTarget newFrameReadyAtTime:currentTime atIndex:textureIndexOfTarget];
+                [currentTarget setInputTexture:outputTexture atIndex:textureIndexOfTarget];
             }
         }
     }
@@ -682,57 +557,30 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
     
     CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
     CVImageBufferRef cameraFrame = CMSampleBufferGetImageBuffer(sampleBuffer);
-    int bufferWidth = (int) CVPixelBufferGetWidth(cameraFrame);
-    int bufferHeight = (int) CVPixelBufferGetHeight(cameraFrame);
-    CFTypeRef colorAttachments = CVBufferGetAttachment(cameraFrame, kCVImageBufferYCbCrMatrixKey, NULL);
-    if (colorAttachments != NULL)
-    {
-        if(CFStringCompare(colorAttachments, kCVImageBufferYCbCrMatrix_ITU_R_601_4, 0) == kCFCompareEqualTo)
-        {
-            if (isFullYUVRange)
-            {
-                _preferredConversion = kColorConversion601FullRange;
-            }
-            else
-            {
-                _preferredConversion = kColorConversion601;
-            }
-        }
-        else
-        {
-            _preferredConversion = kColorConversion709;
-        }
-    }
-    else
-    {
-        if (isFullYUVRange)
-        {
-            _preferredConversion = kColorConversion601FullRange;
-        }
-        else
-        {
-            _preferredConversion = kColorConversion601;
-        }
-    }
-
+    int bufferWidth = CVPixelBufferGetWidth(cameraFrame);
+    int bufferHeight = CVPixelBufferGetHeight(cameraFrame);
+    
 	CMTime currentTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
 
     [GPUImageContext useImageProcessingContext];
 
-    if ([GPUImageContext supportsFastTextureUpload] && captureAsYUV)
+    if ([GPUImageContext supportsFastTextureUpload])
     {
         CVOpenGLESTextureRef luminanceTextureRef = NULL;
         CVOpenGLESTextureRef chrominanceTextureRef = NULL;
+        CVOpenGLESTextureRef texture = NULL;
 
 //        if (captureAsYUV && [GPUImageContext deviceSupportsRedTextures])
         if (CVPixelBufferGetPlaneCount(cameraFrame) > 0) // Check for YUV planar inputs to do RGB conversion
         {
-            CVPixelBufferLockBaseAddress(cameraFrame, 0);
             
             if ( (imageBufferWidth != bufferWidth) && (imageBufferHeight != bufferHeight) )
             {
                 imageBufferWidth = bufferWidth;
                 imageBufferHeight = bufferHeight;
+                
+                [self destroyYUVConversionFBO];
+                [self createYUVConversionFBO];
             }
             
             CVReturn err;
@@ -741,11 +589,11 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
             if ([GPUImageContext deviceSupportsRedTextures])
             {
 //                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_RED_EXT, bufferWidth, bufferHeight, GL_RED_EXT, GL_UNSIGNED_BYTE, 0, &luminanceTextureRef);
-                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, [[GPUImageContext sharedImageProcessingContext] coreVideoTextureCache], cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE, bufferWidth, bufferHeight, GL_LUMINANCE, GL_UNSIGNED_BYTE, 0, &luminanceTextureRef);
+                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE, bufferWidth, bufferHeight, GL_LUMINANCE, GL_UNSIGNED_BYTE, 0, &luminanceTextureRef);
             }
             else
             {
-                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, [[GPUImageContext sharedImageProcessingContext] coreVideoTextureCache], cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE, bufferWidth, bufferHeight, GL_LUMINANCE, GL_UNSIGNED_BYTE, 0, &luminanceTextureRef);
+                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE, bufferWidth, bufferHeight, GL_LUMINANCE, GL_UNSIGNED_BYTE, 0, &luminanceTextureRef);
             }
             if (err)
             {
@@ -762,11 +610,11 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
             if ([GPUImageContext deviceSupportsRedTextures])
             {
 //                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_RG_EXT, bufferWidth/2, bufferHeight/2, GL_RG_EXT, GL_UNSIGNED_BYTE, 1, &chrominanceTextureRef);
-                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, [[GPUImageContext sharedImageProcessingContext] coreVideoTextureCache], cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE_ALPHA, bufferWidth/2, bufferHeight/2, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, 1, &chrominanceTextureRef);
+                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE_ALPHA, bufferWidth/2, bufferHeight/2, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, 1, &chrominanceTextureRef);
             }
             else
             {
-                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, [[GPUImageContext sharedImageProcessingContext] coreVideoTextureCache], cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE_ALPHA, bufferWidth/2, bufferHeight/2, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, 1, &chrominanceTextureRef);
+                err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_LUMINANCE_ALPHA, bufferWidth/2, bufferHeight/2, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, 1, &chrominanceTextureRef);
             }
             if (err)
             {
@@ -778,53 +626,45 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
             
-//            if (!allTargetsWantMonochromeData)
-//            {
-                [self convertYUVToRGBOutput];
-//            }
-
-            int rotatedImageBufferWidth = bufferWidth, rotatedImageBufferHeight = bufferHeight;
-            
-            if (GPUImageRotationSwapsWidthAndHeight(internalRotation))
+            if (!allTargetsWantMonochromeData)
             {
-                rotatedImageBufferWidth = bufferHeight;
-                rotatedImageBufferHeight = bufferWidth;
+                [self convertYUVToRGBOutput];
             }
-            
-            [self updateTargetsForVideoCameraUsingCacheTextureAtWidth:rotatedImageBufferWidth height:rotatedImageBufferHeight time:currentTime];
+
+            [self updateTargetsForVideoCameraUsingCacheTextureAtWidth:bufferWidth height:bufferHeight time:currentTime];
             
             CVPixelBufferUnlockBaseAddress(cameraFrame, 0);
+            CVOpenGLESTextureCacheFlush(coreVideoTextureCache, 0);
             CFRelease(luminanceTextureRef);
             CFRelease(chrominanceTextureRef);
         }
         else
         {
-            // TODO: Mesh this with the output framebuffer structure
+            CVPixelBufferLockBaseAddress(cameraFrame, 0);
             
-//            CVPixelBufferLockBaseAddress(cameraFrame, 0);
-//            
-//            CVReturn err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, [[GPUImageContext sharedImageProcessingContext] coreVideoTextureCache], cameraFrame, NULL, GL_TEXTURE_2D, GL_RGBA, bufferWidth, bufferHeight, GL_BGRA, GL_UNSIGNED_BYTE, 0, &texture);
-//            
-//            if (!texture || err) {
-//                NSLog(@"Camera CVOpenGLESTextureCacheCreateTextureFromImage failed (error: %d)", err);
-//                NSAssert(NO, @"Camera failure");
-//                return;
-//            }
-//            
-//            outputTexture = CVOpenGLESTextureGetName(texture);
-//            //        glBindTexture(CVOpenGLESTextureGetTarget(texture), outputTexture);
-//            glBindTexture(GL_TEXTURE_2D, outputTexture);
-//            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-//            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-//            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-//            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-//            
-//            [self updateTargetsForVideoCameraUsingCacheTextureAtWidth:bufferWidth height:bufferHeight time:currentTime];
-//
-//            CVPixelBufferUnlockBaseAddress(cameraFrame, 0);
-//            CFRelease(texture);
-//
-//            outputTexture = 0;
+            CVReturn err = CVOpenGLESTextureCacheCreateTextureFromImage(kCFAllocatorDefault, coreVideoTextureCache, cameraFrame, NULL, GL_TEXTURE_2D, GL_RGBA, bufferWidth, bufferHeight, GL_BGRA, GL_UNSIGNED_BYTE, 0, &texture);
+            
+            if (!texture || err) {
+                NSLog(@"Camera CVOpenGLESTextureCacheCreateTextureFromImage failed (error: %d)", err);
+                NSAssert(NO, @"Camera failure");
+                return;
+            }
+            
+            outputTexture = CVOpenGLESTextureGetName(texture);
+            //        glBindTexture(CVOpenGLESTextureGetTarget(texture), outputTexture);
+            glBindTexture(GL_TEXTURE_2D, outputTexture);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            
+            [self updateTargetsForVideoCameraUsingCacheTextureAtWidth:bufferWidth height:bufferHeight time:currentTime];
+
+            CVPixelBufferUnlockBaseAddress(cameraFrame, 0);
+            CVOpenGLESTextureCacheFlush(coreVideoTextureCache, 0);
+            CFRelease(texture);
+
+            outputTexture = 0;
         }
         
         
@@ -844,19 +684,29 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
     {
         CVPixelBufferLockBaseAddress(cameraFrame, 0);
         
-        int bytesPerRow = (int) CVPixelBufferGetBytesPerRow(cameraFrame);
-        outputFramebuffer = [[GPUImageContext sharedFramebufferCache] fetchFramebufferForSize:CGSizeMake(bytesPerRow / 4, bufferHeight) onlyTexture:YES];
-        [outputFramebuffer activateFramebuffer];
-
-        glBindTexture(GL_TEXTURE_2D, [outputFramebuffer texture]);
+        glBindTexture(GL_TEXTURE_2D, outputTexture);
         
         //        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bufferWidth, bufferHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, CVPixelBufferGetBaseAddress(cameraFrame));
         
         // Using BGRA extension to pull in video frame data directly
         // The use of bytesPerRow / 4 accounts for a display glitch present in preview video frames when using the photo preset on the camera
+        size_t bytesPerRow = CVPixelBufferGetBytesPerRow(cameraFrame);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, bytesPerRow / 4, bufferHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, CVPixelBufferGetBaseAddress(cameraFrame));
         
-        [self updateTargetsForVideoCameraUsingCacheTextureAtWidth:bytesPerRow / 4 height:bufferHeight time:currentTime];
+        for (id<GPUImageInput> currentTarget in targets)
+        {
+            if ([currentTarget enabled])
+            {
+                if (currentTarget != self.targetToIgnoreForUpdates)
+                {
+                    NSInteger indexOfObject = [targets indexOfObject:currentTarget];
+                    NSInteger textureIndexOfTarget = [[targetTextureIndices objectAtIndex:indexOfObject] integerValue];
+                    
+                    [currentTarget setInputSize:CGSizeMake(bufferWidth, bufferHeight) atIndex:textureIndexOfTarget];
+                    [currentTarget newFrameReadyAtTime:currentTime atIndex:textureIndexOfTarget];
+                }
+            }
+        }
         
         CVPixelBufferUnlockBaseAddress(cameraFrame, 0);
         
@@ -880,18 +730,8 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 - (void)convertYUVToRGBOutput;
 {
     [GPUImageContext setActiveShaderProgram:yuvConversionProgram];
-
-    int rotatedImageBufferWidth = imageBufferWidth, rotatedImageBufferHeight = imageBufferHeight;
-
-    if (GPUImageRotationSwapsWidthAndHeight(internalRotation))
-    {
-        rotatedImageBufferWidth = imageBufferHeight;
-        rotatedImageBufferHeight = imageBufferWidth;
-    }
-
-    outputFramebuffer = [[GPUImageContext sharedFramebufferCache] fetchFramebufferForSize:CGSizeMake(rotatedImageBufferWidth, rotatedImageBufferHeight) textureOptions:self.outputTextureOptions onlyTexture:NO];
-    [outputFramebuffer activateFramebuffer];
-
+    [self setYUVConversionFBO];
+    
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
@@ -902,6 +742,13 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
         1.0f,  1.0f,
     };
     
+    static const GLfloat textureCoordinates[] = {
+        0.0f, 0.0f,
+        1.0f, 0.0f,
+        0.0f, 1.0f,
+        1.0f, 1.0f,
+    };
+    
 	glActiveTexture(GL_TEXTURE4);
 	glBindTexture(GL_TEXTURE_2D, luminanceTexture);
 	glUniform1i(yuvConversionLuminanceTextureUniform, 4);
@@ -910,13 +757,63 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 	glBindTexture(GL_TEXTURE_2D, chrominanceTexture);
 	glUniform1i(yuvConversionChrominanceTextureUniform, 5);
 
-    glUniformMatrix3fv(yuvConversionMatrixUniform, 1, GL_FALSE, _preferredConversion);
-
     glVertexAttribPointer(yuvConversionPositionAttribute, 2, GL_FLOAT, 0, 0, squareVertices);
-	glVertexAttribPointer(yuvConversionTextureCoordinateAttribute, 2, GL_FLOAT, 0, 0, [GPUImageFilter textureCoordinatesForRotation:internalRotation]);
+	glVertexAttribPointer(yuvConversionTextureCoordinateAttribute, 2, GL_FLOAT, 0, 0, textureCoordinates);
     
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
+
+- (void)setYUVConversionFBO;
+{
+    if (!yuvConversionFramebuffer)
+    {
+        [self createYUVConversionFBO];
+    }
+    
+    glBindFramebuffer(GL_FRAMEBUFFER, yuvConversionFramebuffer);
+    
+    glViewport(0, 0, imageBufferWidth, imageBufferHeight);
+}
+
+- (void)createYUVConversionFBO;
+{
+    [self initializeOutputTextureIfNeeded];
+    
+    glActiveTexture(GL_TEXTURE1);
+    glGenFramebuffers(1, &yuvConversionFramebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, yuvConversionFramebuffer);
+    
+    glBindTexture(GL_TEXTURE_2D, outputTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, imageBufferWidth, imageBufferHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0);
+    
+	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    [self notifyTargetsAboutNewOutputTexture];
+
+    NSAssert(status == GL_FRAMEBUFFER_COMPLETE, @"Incomplete filter FBO: %d", status);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+}
+
+- (void)destroyYUVConversionFBO;
+{
+    runSynchronouslyOnVideoProcessingQueue(^{
+        [GPUImageContext useImageProcessingContext];
+
+        if (yuvConversionFramebuffer)
+        {
+            glDeleteFramebuffers(1, &yuvConversionFramebuffer);
+            yuvConversionFramebuffer = 0;
+        }
+        
+        if (outputTexture)
+        {
+            glDeleteTextures(1, &outputTexture);
+            outputTexture = 0;
+        }
+    });
+}
+
 
 #pragma mark -
 #pragma mark Benchmarking
@@ -926,22 +823,12 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
     return (totalFrameTimeDuringCapture / (CGFloat)(numberOfFramesCaptured - INITIALFRAMESTOIGNOREFORBENCHMARK)) * 1000.0;
 }
 
-- (void)resetBenchmarkAverage;
-{
-    numberOfFramesCaptured = 0;
-    totalFrameTimeDuringCapture = 0.0;
-}
-
 #pragma mark -
 #pragma mark AVCaptureVideoDataOutputSampleBufferDelegate
 
 - (void)captureOutput:(AVCaptureOutput *)captureOutput didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer fromConnection:(AVCaptureConnection *)connection
 {
-    if (!self.captureSession.isRunning)
-    {
-        return;
-    }
-    else if (captureOutput == audioOutput)
+    if (captureOutput == audioOutput)
     {
         [self processAudioSampleBuffer:sampleBuffer];
     }
@@ -973,16 +860,45 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
 
 - (void)setAudioEncodingTarget:(GPUImageMovieWriter *)newValue;
 {
-    if (newValue) {
-        /* Add audio inputs and outputs, if necessary */
-        addedAudioInputsDueToEncodingTarget |= [self addAudioInputsAndOutputs];
-    } else if (addedAudioInputsDueToEncodingTarget) {
-        /* Remove audio inputs and outputs, if they were added by previously setting the audio encoding target */
-        [self removeAudioInputsAndOutputs];
-        addedAudioInputsDueToEncodingTarget = NO;
-    }
-    
-    [super setAudioEncodingTarget:newValue];
+    runSynchronouslyOnVideoProcessingQueue(^{
+        [_captureSession beginConfiguration];
+        
+        if (newValue == nil)
+        {
+            if (audioOutput)
+            {
+                [_captureSession removeInput:audioInput];
+                [_captureSession removeOutput:audioOutput];
+                audioInput = nil;
+                audioOutput = nil;
+                _microphone = nil;
+            }
+        }
+        else
+        {
+            _microphone = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+            audioInput = [AVCaptureDeviceInput deviceInputWithDevice:_microphone error:nil];
+            if ([_captureSession canAddInput:audioInput])
+            {
+                [_captureSession addInput:audioInput];
+            }
+            audioOutput = [[AVCaptureAudioDataOutput alloc] init];
+            
+            if ([_captureSession canAddOutput:audioOutput])
+            {
+                [_captureSession addOutput:audioOutput];
+            }
+            else
+            {
+                NSLog(@"Couldn't add audio output");
+            }
+            [audioOutput setSampleBufferDelegate:self queue:audioProcessingQueue];
+        }
+        
+        [_captureSession commitConfiguration];
+        
+        [super setAudioEncodingTarget:newValue];
+    });
 }
 
 - (void)updateOrientationSendToTargets;
@@ -992,102 +908,49 @@ NSString *const kGPUImageYUVVideoRangeConversionForLAFragmentShaderString = SHAD
         //    From the iOS 5.0 release notes:
         //    In previous iOS versions, the front-facing camera would always deliver buffers in AVCaptureVideoOrientationLandscapeLeft and the back-facing camera would always deliver buffers in AVCaptureVideoOrientationLandscapeRight.
         
-        if (captureAsYUV && [GPUImageContext supportsFastTextureUpload])
+        if ([self cameraPosition] == AVCaptureDevicePositionBack)
         {
-            outputRotation = kGPUImageNoRotation;
-            if ([self cameraPosition] == AVCaptureDevicePositionBack)
+            if (_horizontallyMirrorRearFacingCamera)
             {
-                if (_horizontallyMirrorRearFacingCamera)
+                switch(_outputImageOrientation)
                 {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:internalRotation = kGPUImageRotateRightFlipVertical; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:internalRotation = kGPUImageRotate180; break;
-                        case UIInterfaceOrientationLandscapeLeft:internalRotation = kGPUImageFlipHorizonal; break;
-                        case UIInterfaceOrientationLandscapeRight:internalRotation = kGPUImageFlipVertical; break;
-                    }
-                }
-                else
-                {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:internalRotation = kGPUImageRotateRight; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:internalRotation = kGPUImageRotateLeft; break;
-                        case UIInterfaceOrientationLandscapeLeft:internalRotation = kGPUImageRotate180; break;
-                        case UIInterfaceOrientationLandscapeRight:internalRotation = kGPUImageNoRotation; break;
-                    }
+                    case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRightFlipVertical; break;
+                    case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotate180; break;
+                    case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageFlipHorizonal; break;
+                    case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageFlipVertical; break;
                 }
             }
             else
             {
-                if (_horizontallyMirrorFrontFacingCamera)
+                switch(_outputImageOrientation)
                 {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:internalRotation = kGPUImageRotateRightFlipVertical; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:internalRotation = kGPUImageRotateRightFlipHorizontal; break;
-                        case UIInterfaceOrientationLandscapeLeft:internalRotation = kGPUImageFlipHorizonal; break;
-                        case UIInterfaceOrientationLandscapeRight:internalRotation = kGPUImageFlipVertical; break;
-                    }
-                }
-                else
-                {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:internalRotation = kGPUImageRotateRight; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:internalRotation = kGPUImageRotateLeft; break;
-                        case UIInterfaceOrientationLandscapeLeft:internalRotation = kGPUImageNoRotation; break;
-                        case UIInterfaceOrientationLandscapeRight:internalRotation = kGPUImageRotate180; break;
-                    }
+                    case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRight; break;
+                    case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateLeft; break;
+                    case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageRotate180; break;
+                    case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageNoRotation; break;
                 }
             }
         }
         else
         {
-            if ([self cameraPosition] == AVCaptureDevicePositionBack)
+            if (_horizontallyMirrorFrontFacingCamera)
             {
-                if (_horizontallyMirrorRearFacingCamera)
+                switch(_outputImageOrientation)
                 {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRightFlipVertical; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotate180; break;
-                        case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageFlipHorizonal; break;
-                        case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageFlipVertical; break;
-                    }
-                }
-                else
-                {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRight; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateLeft; break;
-                        case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageRotate180; break;
-                        case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageNoRotation; break;
-                    }
+                    case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRightFlipVertical; break;
+                    case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateRightFlipHorizontal; break;
+                    case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageFlipHorizonal; break;
+                    case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageFlipVertical; break;
                 }
             }
             else
             {
-                if (_horizontallyMirrorFrontFacingCamera)
+                switch(_outputImageOrientation)
                 {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRightFlipVertical; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateRightFlipHorizontal; break;
-                        case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageFlipHorizonal; break;
-                        case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageFlipVertical; break;
-                    }
-                }
-                else
-                {
-                    switch(_outputImageOrientation)
-                    {
-                        case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRight; break;
-                        case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateLeft; break;
-                        case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageNoRotation; break;
-                        case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageRotate180; break;
-                    }
+                    case UIInterfaceOrientationPortrait:outputRotation = kGPUImageRotateRight; break;
+                    case UIInterfaceOrientationPortraitUpsideDown:outputRotation = kGPUImageRotateLeft; break;
+                    case UIInterfaceOrientationLandscapeLeft:outputRotation = kGPUImageNoRotation; break;
+                    case UIInterfaceOrientationLandscapeRight:outputRotation = kGPUImageRotate180; break;
                 }
             }
         }

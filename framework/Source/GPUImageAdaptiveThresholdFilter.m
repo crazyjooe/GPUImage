@@ -87,14 +87,14 @@ NSString *const kGPUImageAdaptiveThresholdFragmentShaderString = SHADER_STRING
 #pragma mark -
 #pragma mark Accessors
 
-- (void)setBlurRadiusInPixels:(CGFloat)newValue;
+- (void)setBlurSize:(CGFloat)newValue;
 {
-    boxBlurFilter.blurRadiusInPixels = newValue;
+    boxBlurFilter.blurSize = newValue;
 }
 
-- (CGFloat)blurRadiusInPixels;
+- (CGFloat)blurSize;
 {
-    return boxBlurFilter.blurRadiusInPixels;
+    return boxBlurFilter.blurSize;
 }
 
 @end

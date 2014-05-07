@@ -33,14 +33,14 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
 
 @interface GPUImageMovieWriter ()
 {
-    GPUImageFramebuffer *firstInputFramebuffer;
-
     GLuint movieFramebuffer, movieRenderbuffer;
     
     GLProgram *colorSwizzlingProgram;
     GLint colorSwizzlingPositionAttribute, colorSwizzlingTextureCoordinateAttribute;
     GLint colorSwizzlingInputTextureUniform;
 
+    GLuint inputTextureForMovieRendering;
+    
     GLubyte *frameData;
     
     CMTime startTime, previousFrameTime;
@@ -197,13 +197,11 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     // custom output settings specified
     else 
     {
-        #ifndef NS_BLOCK_ASSERTIONS
 		NSString *videoCodec = [outputSettings objectForKey:AVVideoCodecKey];
 		NSNumber *width = [outputSettings objectForKey:AVVideoWidthKey];
 		NSNumber *height = [outputSettings objectForKey:AVVideoHeightKey];
 		
 		NSAssert(videoCodec && width && height, @"OutputSettings is missing required parameters.");
-        #endif
     }
     
     /*
@@ -372,10 +370,9 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, (int)videoSize.width, (int)videoSize.height);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, movieRenderbuffer);	
 	
-    #ifndef NS_BLOCK_ASSERTIONS
 	GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    
     NSAssert(status == GL_FRAMEBUFFER_COMPLETE, @"Incomplete filter FBO: %d", status);
-    #endif
 }
 
 - (void)destroyDataFBO;
@@ -433,8 +430,8 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     };
     
 	glActiveTexture(GL_TEXTURE4);
-	glBindTexture(GL_TEXTURE_2D, [firstInputFramebuffer texture]);
-	glUniform1i(colorSwizzlingInputTextureUniform, 4);
+	glBindTexture(GL_TEXTURE_2D, inputTextureForMovieRendering);
+	glUniform1i(colorSwizzlingInputTextureUniform, 4);	
     
     glVertexAttribPointer(colorSwizzlingPositionAttribute, 2, GL_FLOAT, 0, 0, squareVertices);
 	glVertexAttribPointer(colorSwizzlingTextureCoordinateAttribute, 2, GL_FLOAT, 0, 0, textureCoordinates);
@@ -442,7 +439,6 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     
     glFinish();
-    [firstInputFramebuffer unlock];
 }
 
 #pragma mark -
@@ -452,7 +448,6 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
 {
     if (!isRecording)
     {
-        [firstInputFramebuffer unlock];
         return;
     }
 
@@ -460,7 +455,6 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     // Also, if two consecutive times with the same value are added to the movie, it aborts recording, so I bail on that case
     if ( (CMTIME_IS_INVALID(frameTime)) || (CMTIME_COMPARE_INLINE(frameTime, ==, previousFrameTime)) || (CMTIME_IS_INDEFINITE(frameTime)) ) 
     {
-        [firstInputFramebuffer unlock];
         return;
     }
 
@@ -477,7 +471,6 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
 
     if (!assetWriterVideoInput.readyForMoreMediaData)
     {
-        [firstInputFramebuffer unlock];
         NSLog(@"Had to drop a video frame");
         return;
     }
@@ -525,10 +518,9 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
     return 0;
 }
 
-- (void)setInputFramebuffer:(GPUImageFramebuffer *)newInputFramebuffer atIndex:(NSInteger)textureIndex;
+- (void)setInputTexture:(GLuint)newInputTexture atIndex:(NSInteger)textureIndex;
 {
-    firstInputFramebuffer = newInputFramebuffer;
-    [firstInputFramebuffer lock];
+    inputTextureForMovieRendering = newInputTexture;
 }
 
 - (void)setInputRotation:(GPUImageRotationMode)newInputRotation atIndex:(NSInteger)textureIndex;
@@ -563,6 +555,11 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
 - (BOOL)shouldIgnoreUpdatesToThisTarget;
 {
     return NO;
+}
+
+- (void)setTextureDelegate:(id<GPUImageTextureDelegate>)newTextureDelegate atIndex:(NSInteger)textureIndex;
+{
+    textureDelegate = newTextureDelegate;
 }
 
 - (void)conserveMemoryForNextFrame;

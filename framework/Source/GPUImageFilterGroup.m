@@ -40,14 +40,14 @@
 #pragma mark -
 #pragma mark Still image processing
 
-- (void)useNextFrameForImageCapture;
+- (CGImageRef)newCGImageFromCurrentlyProcessedOutputWithOrientation:(UIImageOrientation)imageOrientation;
 {
-    [self.terminalFilter useNextFrameForImageCapture];
+    return [self.terminalFilter newCGImageFromCurrentlyProcessedOutputWithOrientation:imageOrientation];
 }
 
-- (CGImageRef)newCGImageFromCurrentlyProcessedOutput;
+- (void)prepareForImageCapture;
 {
-    return [self.terminalFilter newCGImageFromCurrentlyProcessedOutput];
+    [self.terminalFilter prepareForImageCapture];
 }
 
 #pragma mark -
@@ -88,6 +88,8 @@
 
 - (void)newFrameReadyAtTime:(CMTime)frameTime atIndex:(NSInteger)textureIndex;
 {
+    outputTextureRetainCount = [_initialFilters count];
+    
     for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
     {
         if (currentFilter != self.inputFilterToIgnoreForUpdates)
@@ -97,11 +99,21 @@
     }
 }
 
-- (void)setInputFramebuffer:(GPUImageFramebuffer *)newInputFramebuffer atIndex:(NSInteger)textureIndex;
+- (void)setTextureDelegate:(id<GPUImageTextureDelegate>)newTextureDelegate atIndex:(NSInteger)textureIndex;
+{
+    firstTextureDelegate = newTextureDelegate;
+    
+    for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
+    {
+        [currentFilter setTextureDelegate:self atIndex:textureIndex];
+    }
+}
+
+- (void)setInputTexture:(GLuint)newInputTexture atIndex:(NSInteger)textureIndex;
 {
     for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
     {
-        [currentFilter setInputFramebuffer:newInputFramebuffer atIndex:textureIndex];
+        [currentFilter setInputTexture:newInputTexture atIndex:textureIndex];
     }
 }
 
@@ -147,6 +159,7 @@
     }
 }
 
+
 - (CGSize)maximumOutputSize;
 {
     // I'm temporarily disabling adjustments for smaller output sizes until I figure out how to make this work better
@@ -170,14 +183,17 @@
 
 - (void)endProcessing;
 {
-    if (!isEndProcessing)
+    for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
     {
-        isEndProcessing = YES;
-        
-        for (id<GPUImageInput> currentTarget in _initialFilters)
-        {
-            [currentTarget endProcessing];
-        }
+        [currentFilter endProcessing];
+    }
+}
+
+- (void)conserveMemoryForNextFrame;
+{
+    for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
+    {
+        [currentFilter conserveMemoryForNextFrame];
     }
 }
 
@@ -197,6 +213,18 @@
     for (GPUImageOutput<GPUImageInput> *currentFilter in _initialFilters)
     {
         [currentFilter setCurrentlyReceivingMonochromeInput:newValue];
+    }
+}
+
+#pragma mark -
+#pragma mark GPUImageTextureDelegate methods
+
+- (void)textureNoLongerNeededForTarget:(id<GPUImageInput>)textureTarget;
+{
+    outputTextureRetainCount--;
+    if (outputTextureRetainCount < 1)
+    {
+        [firstTextureDelegate textureNoLongerNeededForTarget:self];
     }
 }
 

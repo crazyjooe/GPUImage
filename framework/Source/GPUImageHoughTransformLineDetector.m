@@ -201,8 +201,7 @@
 
 - (BOOL)wantsMonochromeInput;
 {
-//    return YES;
-    return NO;
+    return YES;
 }
 
 #pragma mark -

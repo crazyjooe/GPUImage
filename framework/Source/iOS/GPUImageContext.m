@@ -2,12 +2,9 @@
 #import <OpenGLES/EAGLDrawable.h>
 #import <AVFoundation/AVFoundation.h>
 
-#define MAXSHADERPROGRAMSALLOWEDINCACHE 40
-
 @interface GPUImageContext()
 {
     NSMutableDictionary *shaderProgramCache;
-    NSMutableArray *shaderProgramUsageHistory;
     EAGLSharegroup *_sharegroup;
 }
 
@@ -18,8 +15,6 @@
 @synthesize context = _context;
 @synthesize currentShaderProgram = _currentShaderProgram;
 @synthesize contextQueue = _contextQueue;
-@synthesize coreVideoTextureCache = _coreVideoTextureCache;
-@synthesize framebufferCache = _framebufferCache;
 
 static void *openGLESContextQueueKey;
 
@@ -32,13 +27,11 @@ static void *openGLESContextQueueKey;
 
 	openGLESContextQueueKey = &openGLESContextQueueKey;
     _contextQueue = dispatch_queue_create("com.sunsetlakesoftware.GPUImage.openGLESContextQueue", NULL);
-    
-#if (!defined(__IPHONE_6_0) || (__IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_6_0))
+#if (!defined(__IPHONE_6_0) || (__IPHONE_OS_VERSION_MAX_ALLOWED < __IPHONE_6_0))
 #else
 	dispatch_queue_set_specific(_contextQueue, openGLESContextQueueKey, (__bridge void *)self, NULL);
 #endif
     shaderProgramCache = [[NSMutableDictionary alloc] init];
-    shaderProgramUsageHistory = [[NSMutableArray alloc] init];
     
     return self;
 }
@@ -62,11 +55,6 @@ static void *openGLESContextQueueKey;
 + (dispatch_queue_t)sharedContextQueue;
 {
     return [[self sharedImageProcessingContext] contextQueue];
-}
-
-+ (GPUImageFramebufferCache *)sharedFramebufferCache;
-{
-    return [[self sharedImageProcessingContext] framebufferCache];
 }
 
 + (void)useImageProcessingContext;
@@ -109,28 +97,9 @@ static void *openGLESContextQueueKey;
 
 + (GLint)maximumTextureUnitsForThisDevice;
 {
-    static dispatch_once_t pred;
-    static GLint maxTextureUnits = 0;
-
-    dispatch_once(&pred, ^{
-        [self useImageProcessingContext];
-        glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
-    });
-    
+    GLint maxTextureUnits; 
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &maxTextureUnits);
     return maxTextureUnits;
-}
-
-+ (GLint)maximumVaryingVectorsForThisDevice;
-{
-    static dispatch_once_t pred;
-    static GLint maxVaryingVectors = 0;
-
-    dispatch_once(&pred, ^{
-        [self useImageProcessingContext];
-        glGetIntegerv(GL_MAX_VARYING_VECTORS, &maxVaryingVectors);
-    });
-
-    return maxVaryingVectors;
 }
 
 + (BOOL)deviceSupportsOpenGLESExtension:(NSString *)extension;
@@ -212,16 +181,6 @@ static void *openGLESContextQueueKey;
     {
         programFromCache = [[GLProgram alloc] initWithVertexShaderString:vertexShaderString fragmentShaderString:fragmentShaderString];
         [shaderProgramCache setObject:programFromCache forKey:lookupKeyForShaderProgram];
-//        [shaderProgramUsageHistory addObject:lookupKeyForShaderProgram];
-//        if ([shaderProgramUsageHistory count] >= MAXSHADERPROGRAMSALLOWEDINCACHE)
-//        {
-//            for (NSUInteger currentShaderProgramRemovedFromCache = 0; currentShaderProgramRemovedFromCache < 10; currentShaderProgramRemovedFromCache++)
-//            {
-//                NSString *shaderProgramToRemoveFromCache = [shaderProgramUsageHistory objectAtIndex:0];
-//                [shaderProgramUsageHistory removeObjectAtIndex:0];
-//                [shaderProgramCache removeObjectForKey:shaderProgramToRemoveFromCache];
-//            }
-//        }
     }
     
     return programFromCache;
@@ -269,36 +228,6 @@ static void *openGLESContextQueueKey;
     }
     
     return _context;
-}
-
-- (CVOpenGLESTextureCacheRef)coreVideoTextureCache;
-{
-    if (_coreVideoTextureCache == NULL)
-    {
-#if defined(__IPHONE_6_0)
-        CVReturn err = CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, [self context], NULL, &_coreVideoTextureCache);
-#else
-        CVReturn err = CVOpenGLESTextureCacheCreate(kCFAllocatorDefault, NULL, (__bridge void *)[self context], NULL, &_coreVideoTextureCache);
-#endif
-        
-        if (err)
-        {
-            NSAssert(NO, @"Error at CVOpenGLESTextureCacheCreate %d", err);
-        }
-
-    }
-    
-    return _coreVideoTextureCache;
-}
-
-- (GPUImageFramebufferCache *)framebufferCache;
-{
-    if (_framebufferCache == nil)
-    {
-        _framebufferCache = [[GPUImageFramebufferCache alloc] init];
-    }
-    
-    return _framebufferCache;
 }
 
 @end

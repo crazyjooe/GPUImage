@@ -16,8 +16,8 @@
 /// The image width and height factors tweak the appearance of the edges. By default, they match the filter size in pixels
 @property(readwrite, nonatomic) CGFloat texelHeight; 
 
-/// The radius of the underlying Gaussian blur. The default is 2.0.
-@property (readwrite, nonatomic) CGFloat blurRadiusInPixels;
+/// A multiplier for the blur size, ranging from 0.0 on up, with a default of 0.5
+@property (readwrite, nonatomic) CGFloat blurSize;
 
 /// The threshold at which to apply the edges, default of 0.2
 @property(readwrite, nonatomic) CGFloat threshold; 

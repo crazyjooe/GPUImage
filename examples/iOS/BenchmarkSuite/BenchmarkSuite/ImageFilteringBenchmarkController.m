@@ -131,12 +131,12 @@
     
     GPUImagePicture *stillImageSource = [[GPUImagePicture alloc] initWithImage:imageToProcess];
     GPUImageSepiaFilter *stillImageFilter = [[GPUImageSepiaFilter alloc] init];
+    [stillImageFilter prepareForImageCapture];
     
     [stillImageSource addTarget:stillImageFilter];
-    [stillImageFilter useNextFrameForImageCapture];
     [stillImageSource processImage];
     
-    UIImage *currentFilteredVideoFrame = [stillImageFilter imageFromCurrentFramebuffer];
+    UIImage *currentFilteredVideoFrame = [stillImageFilter imageFromCurrentlyProcessedOutput];
     
     elapsedTime = CFAbsoluteTimeGetCurrent() - startTime;
     processingTimeForGPUImageRoutine = elapsedTime * 1000.0;

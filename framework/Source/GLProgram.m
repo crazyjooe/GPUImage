@@ -97,8 +97,6 @@ typedef void (*GLLogFunction) (GLuint program,
                  type:(GLenum)type 
                string:(NSString *)shaderString
 {
-//    CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
-
     GLint status;
     const GLchar *source;
     
@@ -129,9 +127,6 @@ typedef void (*GLLogFunction) (GLuint program,
 		}
 	}	
 	
-//    CFAbsoluteTime linkTime = (CFAbsoluteTimeGetCurrent() - startTime);
-//    NSLog(@"Compiled in %f ms", linkTime * 1000.0);
-
     return status == GL_TRUE;
 }
 // END:compile
@@ -162,8 +157,6 @@ typedef void (*GLLogFunction) (GLuint program,
 // START:link
 - (BOOL)link
 {
-//    CFAbsoluteTime startTime = CFAbsoluteTimeGetCurrent();
-
     GLint status;
     
     glLinkProgram(program);
@@ -184,10 +177,6 @@ typedef void (*GLLogFunction) (GLuint program,
     }
     
     self.initialized = YES;
-
-//    CFAbsoluteTime linkTime = (CFAbsoluteTimeGetCurrent() - startTime);
-//    NSLog(@"Linked in %f ms", linkTime * 1000.0);
-
     return YES;
 }
 // END:link

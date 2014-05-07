@@ -9,8 +9,8 @@
 
 @interface GPUImageView () 
 {
-    GPUImageFramebuffer *inputFramebufferForDisplay;
-
+    GLuint inputTextureForDisplay;
+    
     GLProgram *displayProgram;
     GLint displayPositionAttribute, displayTextureCoordinateAttribute;
     GLint displayInputTextureUniform;
@@ -301,13 +301,6 @@
         0.0f, 1.0f,
     };
     
-    static const GLfloat rotateRightHorizontalFlipTextureCoordinates[] = {
-        1.0f, 1.0f,
-        1.0f, 0.0f,
-        0.0f, 1.0f,
-        0.0f, 0.0f,
-    };
-    
     static const GLfloat rotate180TextureCoordinates[] = {
         1.0f, 0.0f,
         0.0f, 0.0f,
@@ -323,7 +316,6 @@
         case kGPUImageFlipVertical: return verticalFlipTextureCoordinates;
         case kGPUImageFlipHorizonal: return horizontalFlipTextureCoordinates;
         case kGPUImageRotateRightFlipVertical: return rotateRightVerticalFlipTextureCoordinates;
-        case kGPUImageRotateRightFlipHorizontal: return rotateRightHorizontalFlipTextureCoordinates;
         case kGPUImageRotate180: return rotate180TextureCoordinates;
     }
 }
@@ -349,7 +341,7 @@
         glClear(GL_COLOR_BUFFER_BIT);
 
         glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, [inputFramebufferForDisplay texture]);
+        glBindTexture(GL_TEXTURE_2D, inputTextureForDisplay);
         glUniform1i(displayInputTextureUniform, 4);
 
         glVertexAttribPointer(displayPositionAttribute, 2, GL_FLOAT, 0, 0, imageVertices);
@@ -361,9 +353,6 @@
         [self presentFramebuffer];
         glBindTexture(GL_TEXTURE_2D, 0);
         [self unlockFocus];
-        
-        [inputFramebufferForDisplay unlock];
-        inputFramebufferForDisplay = nil;
     });
 }
 
@@ -372,10 +361,9 @@
     return 0;
 }
 
-- (void)setInputFramebuffer:(GPUImageFramebuffer *)newInputFramebuffer atIndex:(NSInteger)textureIndex;
+- (void)setInputTexture:(GLuint)newInputTexture atIndex:(NSInteger)textureIndex;
 {
-    inputFramebufferForDisplay = newInputFramebuffer;
-    [inputFramebufferForDisplay lock];
+    inputTextureForDisplay = newInputTexture;
 }
 
 - (void)setInputRotation:(GPUImageRotationMode)newInputRotation atIndex:(NSInteger)textureIndex;
@@ -424,6 +412,11 @@
 - (BOOL)shouldIgnoreUpdatesToThisTarget;
 {
     return NO;
+}
+
+- (void)setTextureDelegate:(id<GPUImageTextureDelegate>)newTextureDelegate atIndex:(NSInteger)textureIndex;
+{
+    textureDelegate = newTextureDelegate;
 }
 
 - (void)conserveMemoryForNextFrame;
