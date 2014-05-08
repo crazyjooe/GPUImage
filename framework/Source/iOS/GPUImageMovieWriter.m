@@ -350,8 +350,12 @@ NSString *const kGPUImageColorSwizzlingFragmentShaderString = SHADER_STRING
         
 //        NSLog(@"Recorded audio sample time: %lld, %d, %lld", currentSampleTime.value, currentSampleTime.timescale, currentSampleTime.epoch);
         dispatch_async(movieWritingQueue, ^{
-            [assetWriterAudioInput appendSampleBuffer:audioBuffer];
-            
+            if (assetWriter.status == AVAssetWriterStatusWriting &&
+                [assetWriterAudioInput isReadyForMoreMediaData]) {
+                if (![assetWriterAudioInput appendSampleBuffer:audioBuffer])
+                    NSLog(@"Problem appending audio buffer at time: %@",
+                          CFBridgingRelease(CMTimeCopyDescription(kCFAllocatorDefault, currentSampleTime)));
+            }
             if (_shouldInvalidateAudioSampleWhenDone)
             {
                 CMSampleBufferInvalidate(audioBuffer);
